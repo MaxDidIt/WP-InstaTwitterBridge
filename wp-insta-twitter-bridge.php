@@ -94,6 +94,8 @@ function itb_render_instagram_twitter_bridge()
 
     $twitter_handle = get_option(ITB_OPTION_TWITTER_HANDLE);
 
+    header('Location: https://www.instagram.com/p/' . $instagram_id);
+
     ?>
     <!DOCTYPE html>
     <html>
