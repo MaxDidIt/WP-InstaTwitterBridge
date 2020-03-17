@@ -15,6 +15,7 @@ define('ITB_SLUG', 'instagram-twitter-bridge');
 define('ITB_SLUG_OPTIONS', 'itb_settings');
 
 define('ITB_ID_TWITTER_HANDLE', 'itb_twitter_handle');
+define('ITB_ID_INSTAGRAM_HANDLE', 'itb_instagram_handle');
 define('ITB_ID_BRIDGE_URL', 'itb_bridge_url');
 define('ITB_ID_INSTAGRAM_POST', 'itb_instagram_post');
 define('ITB_ID_PREVIEW_HEADER', 'itb_preview_header');
@@ -42,14 +43,30 @@ function itb_get_instagram_post_info($target_id)
     $http_code = curl_getinfo($curl_handle, CURLINFO_RESPONSE_CODE);
     $content_type = curl_getinfo($curl_handle, CURLINFO_CONTENT_TYPE);
 
+    $instagram_handle = get_option(ITB_ID_INSTAGRAM_HANDLE, $_POST[ITB_ID_INSTAGRAM_HANDLE]);
+    // TODO: react to failed requests
+    $parsed_response = json_decode($curl_response);
+    $username = $parsed_response->graphql->shortcode_media->owner->username;
+
+    if(strlen($instagram_handle) > 0 && $username !== $instagram_handle) {
+        return null;
+    }
+
     $result = ['http_code' => $http_code, 'content_type' => $content_type, 'content' => $curl_response, 'target' => $target_id];
     return $result;
 }
 
+/*
 function itb_handle_rest_request($data)
 {
     $instagram_id = $data->get_param('id');
     $info = itb_get_instagram_post_info($instagram_id);
+
+    if(!$info) {
+        wp_die();
+        die();
+    }
+
     $parsed_info = json_decode($info['content']);
 
     $title = $parsed_info->graphql->shortcode_media->edge_media_to_caption->edges[0]->node->text;
@@ -67,6 +84,7 @@ function itb_register_rest_routes()
             'callback' => 'itb_handle_rest_request'
         ]);
 }
+*/
 
 add_action('rest_api_init', 'itb_register_rest_routes');
 
@@ -86,6 +104,13 @@ function itb_render_instagram_twitter_bridge()
     global $wp_query;
     $instagram_id = $wp_query->query[ITB_QUERY_VAR_POST_ID];
     $info = itb_get_instagram_post_info("https://www.instagram.com/p/" . $instagram_id . "/?__a=1");
+
+    if(!$info) {
+        global $wp_query;
+        $wp_query->set_404();
+        status_header(404);
+        return;
+    }
 
     $parsed_info = json_decode($info['content']);
 
@@ -153,7 +178,9 @@ add_action('admin_init', 'itb_register_settings');
 
 function itb_render_options_page()
 {
-    $twitter_handle = get_option(ITB_ID_TWITTER_HANDLE, $_POST[ITB_ID_TWITTER_HANDLE]);
+    $twitter_handle = get_option(ITB_ID_TWITTER_HANDLE, trim($_POST[ITB_ID_TWITTER_HANDLE]));
+    $instagram_handle = get_option(ITB_ID_INSTAGRAM_HANDLE, trim($_POST[ITB_ID_INSTAGRAM_HANDLE]));
+
     ?>
     <h1><?= __('Instagram Twitter Bridge Settings') ?></h1>
     <script>
@@ -164,20 +191,26 @@ function itb_render_options_page()
                     if (this.status == 200) {
                         // Handle returned Instagram post
                         var response = this.response;
-                        var parsedResponse = JSON.parse(response);
-                        var parsedData = JSON.parse(parsedResponse.content);
 
-                        console.log(parsedData);
+                        if(response && response != "null") {
+                            var parsedResponse = JSON.parse(response);
+                            var parsedData = JSON.parse(parsedResponse.content);
 
-                        var shortcode = parsedData.graphql.shortcode_media.shortcode;
-                        var title = parsedData.graphql.shortcode_media.edge_media_to_caption.edges[0].node.text;
-                        var imageSrc = parsedData.graphql.shortcode_media.display_resources[0].src;
+                            console.log(parsedData);
 
-                        var bridgeURL = "<?=get_home_url()?>/<?=ITB_SLUG?>/" + shortcode;
+                            var shortcode = parsedData.graphql.shortcode_media.shortcode;
+                            var title = parsedData.graphql.shortcode_media.edge_media_to_caption.edges[0].node.text;
+                            var imageSrc = parsedData.graphql.shortcode_media.display_resources[0].src;
 
-                        document.getElementById("<?=ITB_ID_PREVIEW_HEADER?>").innerText = title;
-                        document.getElementById("<?=ITB_ID_PREVIEW_IMAGE?>").src = imageSrc;
-                        document.getElementById("<?=ITB_ID_BRIDGE_URL?>").value = bridgeURL;
+                            var bridgeURL = "<?=get_home_url()?>/<?=ITB_SLUG?>/" + shortcode;
+
+                            document.getElementById("<?=ITB_ID_PREVIEW_HEADER?>").innerText = title;
+                            document.getElementById("<?=ITB_ID_PREVIEW_IMAGE?>").src = imageSrc;
+                            document.getElementById("<?=ITB_ID_BRIDGE_URL?>").value = bridgeURL;
+                        }
+                        else {
+                            // TODO: Error message
+                        }
                     } else {
                         // TODO: Error reporting
                     }
@@ -207,7 +240,17 @@ function itb_render_options_page()
                 <th scope="row"><label for="<?= ITB_ID_TWITTER_HANDLE ?>"><?= __('Twitter Handle') ?></label></th>
                 <td>@<input name="<?= ITB_ID_TWITTER_HANDLE ?>" type="text" id="<?= ITB_ID_TWITTER_HANDLE ?>"
                             value="<?= $twitter_handle ?>"
-                            class="regular-text"/></td>
+                            class="regular-text"/>
+                    <p class="description" id="tagline-description"><?=__('The Twitter handle that should be referenced in the generated Twitter cards.')?></p>
+                </td>
+            </tr>
+            <tr>
+                <th scope="row"><label for="<?= ITB_ID_INSTAGRAM_HANDLE ?>"><?= __('Instagram Handle') ?></label></th>
+                <td>@<input name="<?= ITB_ID_INSTAGRAM_HANDLE ?>" type="text" id="<?= ITB_ID_INSTAGRAM_HANDLE ?>"
+                            value="<?= $instagram_handle ?>"
+                            class="regular-text"/>
+                    <p class="description" id="tagline-description"><?=__('The Instagram handle that Twitter card generation should be limited to.')?></p>
+                </td>
             </tr>
         </table>
         <p class="submit"><input type="submit" name="submit" id="submit" class="button button-primary"
@@ -235,6 +278,10 @@ function itb_process_options_page()
 {
     if (isset($_POST[ITB_ID_TWITTER_HANDLE])) {
         add_option(ITB_ID_TWITTER_HANDLE, $_POST[ITB_ID_TWITTER_HANDLE]);
+    }
+
+    if (isset($_POST[ITB_ID_INSTAGRAM_HANDLE])) {
+        add_option(ITB_ID_INSTAGRAM_HANDLE, $_POST[ITB_ID_INSTAGRAM_HANDLE]);
     }
 }
 
